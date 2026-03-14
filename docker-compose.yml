@@ -1,0 +1,73 @@
+services:
+  db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: enterprise_docs
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d enterprise_docs"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.10.2
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+    ports:
+      - "9200:9200"
+
+  redis:
+    image: redis:7-alpine
+
+  api:
+    build: ./backend
+    command: sh -c "python init_db.py && uvicorn main:app --host 0.0.0.0 --port 8000"
+    volumes:
+      - ./storage:/app/storage
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:password@db:5432/enterprise_docs
+      REDIS_URL: redis://redis:6379/0
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+      JWT_SECRET: change-me
+      STORAGE_DIR: /app/storage
+      ELASTICSEARCH_INDEX: enterprise_docs
+    depends_on:
+      - db
+      - redis
+      - elasticsearch
+    ports:
+      - "8000:8000"
+
+  worker:
+    build: ./backend
+    command: celery -A indexing_workers.celery_app worker --loglevel=info
+    volumes:
+      - ./storage:/app/storage
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:password@db:5432/enterprise_docs
+      REDIS_URL: redis://redis:6379/0
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+      STORAGE_DIR: /app/storage
+      ELASTICSEARCH_INDEX: enterprise_docs
+    depends_on:
+      - db
+      - redis
+      - elasticsearch
+
+  frontend:
+    build: ./frontend
+    environment:
+      VITE_API_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
